@@ -1,5 +1,6 @@
 package controller;
 
+import com.google.gson.JsonObject;
 import dal.DoctorDAO;
 import model.Doctor;
 import com.google.gson.Gson;
@@ -8,12 +9,10 @@ import jakarta.servlet.annotation.WebServlet;
 import jakarta.servlet.http.HttpServlet;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
-
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.util.ArrayList;
-import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
 
 
@@ -24,18 +23,91 @@ public class DoctorServlet extends HttpServlet{
     private final Gson gson = new Gson();
 
     @Override
+    protected void doOptions(HttpServletRequest req, HttpServletResponse resp) throws ServletException, IOException {
+        resp.setHeader("Access-Control-Allow-Origin", "*");
+        resp.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+        resp.setHeader("Access-Control-Allow-Headers", "Content-Type");
+        resp.setStatus(HttpServletResponse.SC_OK);
+    }
+
+    @Override
     protected void doGet(HttpServletRequest req, HttpServletResponse resp) throws ServletException, IOException {
         // Add CORS headers
-        resp.setHeader("Access-Control-Allow-Origin", "http://127.0.0.1:5500");
+        resp.setHeader("Access-Control-Allow-Origin", "*");
         resp.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
-        resp.setHeader("Access-Control-Allow-Headers", "Content-Type"); // A
-
+        resp.setHeader("Access-Control-Allow-Headers", "Content-Type");
+        req.setCharacterEncoding("UTF-8");
         resp.setContentType("application/json");
+
         PrintWriter out = resp.getWriter();
         String pathInfo = req.getPathInfo();
 
+        if ("/departments".equals(pathInfo)) {
+            try {
+                ArrayList<String> departments = dao.getDepartments();
+                out.print(gson.toJson(departments));
+            } catch (Exception e) {
+                resp.setStatus(HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
+                out.print("{\"error\":\"Failed to fetch departments\"}");
+            }
+            out.flush();
+            return;
+        }
+
         if (pathInfo == null || pathInfo.equals("/")){
-            out.print(gson.toJson(dao.getAllDoctors()));
+            int page = 8; // Mặc định trang 1
+            int size = 8; // Mặc định 8 bác sĩ mỗi trang
+            String name = null;
+            String department = null;
+
+            try {
+                String pageParam = req.getParameter("page");
+                String sizeParam = req.getParameter("size");
+                name = req.getParameter("name");
+                department = req.getParameter("department");
+
+                if (pageParam != null) page = Integer.parseInt(pageParam);
+                if (sizeParam != null) size = Integer.parseInt(sizeParam);
+            } catch (NumberFormatException e) {
+                resp.setStatus(HttpServletResponse.SC_BAD_REQUEST);
+                out.print("{\"error\":\"Invalid page or size parameter\"}");
+                out.flush();
+                return;
+            }
+
+            // Get paginated data
+            ArrayList<Doctor> doctors;
+            int totalDoctors;
+
+            boolean hasName = name != null && !name.trim().isEmpty();
+            boolean hasDepartment = department != null && !department.trim().isEmpty();
+
+            if (hasName || hasDepartment) {
+                // Search by name and/or department with pagination
+                String nameQuery = hasName ? name.trim().replaceAll("\\s+", " ") : null;
+                String deptQuery = hasDepartment ? department.trim().replaceAll("\\s+", " ") : null;
+                doctors = dao.searchDoctorsByNameAndDepartment(nameQuery, deptQuery, page, size);
+                totalDoctors = dao.getTotalDoctorsByNameAndDepartment(nameQuery, deptQuery);
+            } else {
+                // Get all doctors with pagination
+                doctors = dao.getAllDoctors(page, size);
+                totalDoctors = dao.getTotalDoctors();
+            }
+
+            int totalPages = (int) Math.ceil((double) totalDoctors / size);
+
+            // Tạo đối tượng JSON trả về
+            JsonObject responseJson = new JsonObject();
+            responseJson.add("doctors", gson.toJsonTree(doctors));
+            responseJson.addProperty("totalPages", totalPages);
+            responseJson.addProperty("currentPage", page);
+            if (hasName || hasDepartment) {
+                JsonObject searchKeywords = new JsonObject();
+                if (hasName) searchKeywords.addProperty("name", name);
+                if (hasDepartment) searchKeywords.addProperty("department", department);
+                responseJson.add("searchKeywords", searchKeywords);
+            }
+            out.print(gson.toJson(responseJson));
 
         } else {
             // Lấy user theo ID
@@ -43,14 +115,14 @@ public class DoctorServlet extends HttpServlet{
 
             if (splits.length == 2) {
                 try {
-//                    int id = Integer.parseInt(splits[1]);
-//                    Doctor doctor = dao.getDoctorById(id);
-//                    if (doctor != null) {
-//                        out.print(gson.toJson(doctor));
-//                    } else {
-//                        resp.setStatus(HttpServletResponse.SC_NOT_FOUND);
-//                        out.print("{\"error\":\"Doctor not found\"}");
-//                    }
+                    int id = Integer.parseInt(splits[1]);
+                    Doctor doctor = dao.getDoctorById(id);
+                    if (doctor != null) {
+                        out.print(gson.toJson(doctor));
+                    } else {
+                        resp.setStatus(HttpServletResponse.SC_NOT_FOUND);
+                        out.print("{\"error\":\"Doctor not found\"}");
+                    }
                 } catch (NumberFormatException e) {
                     resp.setStatus(HttpServletResponse.SC_BAD_REQUEST);
                     out.print("{\"error\":\"Invalid path\"}");
